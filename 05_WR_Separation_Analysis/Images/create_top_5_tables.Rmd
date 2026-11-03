@@ -1,0 +1,573 @@
+---
+title: "BDB2027 Visualizations"
+author: "Ryan Butcher"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+
+```{r}
+library(tidyverse)
+library(gt)
+library(nflreadr)
+library(nflplotR)
+library(scales)
+```
+
+
+
+```{r}
+# ==========================================
+# Load Data and Retrieve Player Headshots
+# ==========================================
+
+decel_df <- read_csv(
+  "../Analysis/31_WR_Decel_Comparison_Table.csv"
+) %>%
+  head(5)
+
+rosters <- nflreadr::load_rosters(seasons = 2023:2025) %>%
+  select(gsis_id, full_name) %>%
+  filter(!is.na(gsis_id)) %>%
+  distinct(full_name, .keep_all = TRUE)
+
+decel_df <- decel_df %>%
+  mutate(
+    display_name = recode(
+      display_name,
+      "Antwane Wells" = "Antwane Wells Jr."
+    )
+  ) %>%
+  left_join(rosters, by = c("display_name" = "full_name")) %>%
+  arrange(desc(decel_score))
+
+# Check which players successfully matched to an NFL roster ID
+print(
+  decel_df %>%
+    select(display_name, decel_score, gsis_id)
+)
+
+# Replace missing IDs with blank strings instead of displaying "NA"
+decel_df <- decel_df %>%
+  mutate(
+    gsis_id = if_else(is.na(gsis_id), "", gsis_id)
+  )
+
+
+# ============================================================
+# 3. Define color scales for the table
+# ============================================================
+
+# Deceleration score: darker green indicates a higher score
+score_palette <- scales::col_numeric(
+  palette = c("#FFFFFF", "#006D2C"),
+  domain = c(80, 90)
+)
+
+# Draft pick: earlier picks receive darker green shading
+draft_palette <- scales::col_numeric(
+  palette = c("#006D2C", "#FFFFFF"),
+  domain = c(1, 257)
+)
+
+# Rank difference: red indicates a negative difference,
+# yellow indicates approximately zero, and green indicates
+# a positive difference
+rank_max <- max(abs(decel_df$`Rank Difference`), na.rm = TRUE)
+
+if (!is.finite(rank_max) || rank_max == 0) {
+  rank_max <- 1
+}
+
+rank_palette <- scales::col_numeric(
+  palette = c("#D73027", "#FFFFBF", "#1A9850"),
+  domain = c(-rank_max, rank_max)
+)
+
+
+# ============================================================
+# 4. Create the table
+# ============================================================
+
+decel_table <- decel_df %>%
+  select(
+    display_name,
+    gsis_id,
+    decel_score,
+    draft_overall_pick,
+    ngs_athleticism_score,
+    `Rank Difference`
+  ) %>%
+  gt() %>%
+
+  # Set column header labels; leave the headshot column blank
+  cols_label(
+    display_name = "PLAYER",
+    gsis_id = "",
+    decel_score = "DECELERATION SCORE",
+    draft_overall_pick = "DRAFT PICK",
+    ngs_athleticism_score = "NGS ATHLETICISM SCORE",
+    `Rank Difference` = "RANK DIFFERENCE"
+  ) %>%
+
+  # Add NFL player headshots
+  nflplotR::gt_nfl_headshots(
+    columns = gsis_id,
+    height = 75
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the deceleration score
+  # ----------------------------------------------------------
+
+  fmt_number(
+    columns = decel_score,
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = decel_score,
+    fn = score_palette
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the draft pick
+  # ----------------------------------------------------------
+
+  fmt(
+    columns = draft_overall_pick,
+    fns = function(x) {
+      ifelse(is.na(x), "—", as.character(x))
+    }
+  ) %>%
+  data_color(
+    columns = draft_overall_pick,
+    fn = function(x) {
+      pick <- suppressWarnings(as.numeric(x))
+      colors <- rep("#FFFFFF", length(x))
+
+      valid <- !is.na(pick) & pick >= 1 & pick <= 257
+
+      colors[valid] <- draft_palette(pick[valid])
+      colors[is.na(x)] <- "#D3D3D3"
+
+      colors
+    }
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the NGS athleticism score
+  # ----------------------------------------------------------
+
+  fmt_number(
+    columns = ngs_athleticism_score,
+    decimals = 1
+  ) %>%
+  data_color(
+    columns = ngs_athleticism_score,
+    fn = scales::col_numeric(
+      palette = c("#FFFFFF", "#006D2C"),
+      domain = c(50, 100)
+    )
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the rank difference
+  # ----------------------------------------------------------
+
+  fmt_number(
+    columns = `Rank Difference`,
+    decimals = 0,
+    force_sign = TRUE
+  ) %>%
+  data_color(
+    columns = `Rank Difference`,
+    fn = rank_palette
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Add the table title and set column widths
+  # ----------------------------------------------------------
+
+  tab_header(
+    title = md("**TOP 5 DECELERATION PROSPECTS**")
+  ) %>%
+  cols_width(
+    display_name ~ px(200),
+    gsis_id ~ px(110),
+    decel_score ~ px(145),
+    draft_overall_pick ~ px(135),
+    ngs_athleticism_score ~ px(175),
+    `Rank Difference` ~ px(165)
+  ) %>%
+
+  # ----------------------------------------------------------
+  # General table styling: font, sizing, spacing, and borders
+  # ----------------------------------------------------------
+
+  tab_options(
+    table.font.names = "Arial",
+    table.font.size = px(19),
+    heading.title.font.size = px(29),
+    heading.align = "left",
+    table.border.top.width = px(3),
+    table.border.bottom.width = px(3),
+    column_labels.background.color = "white",
+    column_labels.font.weight = "bold",
+    column_labels.font.size = px(15),
+    data_row.padding = px(15),
+    table_body.hlines.color = "#E5E5E5",
+    table_body.vlines.color = "#FFFFFF",
+    table.width = pct(100),
+    table.background.color = "white"
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Style column headers
+  # ----------------------------------------------------------
+
+  tab_style(
+    style = cell_text(
+      color = "#1B263B",
+      weight = "bold",
+      size = px(15)
+    ),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style = cell_text(align = "center"),
+    locations = cells_column_labels(columns = -display_name)
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Align and format table body text
+  # ----------------------------------------------------------
+
+  tab_style(
+    style = cell_text(
+      align = "center",
+      size = px(24),
+      color = "black"
+    ),
+    locations = cells_body(columns = -display_name)
+  ) %>%
+  tab_style(
+    style = cell_text(
+      align = "left",
+      size = px(22),
+      weight = "bold",
+      style = "italic",
+      color = "black"
+    ),
+    locations = cells_body(columns = display_name)
+  ) %>%
+
+  # Add alternating row shading and an outside border
+  opt_row_striping() %>%
+  opt_table_outline(
+    style = "solid",
+    color = "#D9D9D9",
+    width = px(1)
+  ) %>%
+    # Footnote explaining the rank difference
+  tab_footnote(
+    footnote = paste(
+      "Rank Difference = NGS Athleticism Rank - Deceleration Rank.",
+      "Positive values indicate the deceleration metric ranks a player",
+      "higher than NGS; negative values indicate a lower ranking."
+    ),
+    locations = cells_column_labels(columns = `Rank Difference`)
+  )
+
+
+# ============================================================
+# 5. Display and save the table
+# ============================================================
+
+decel_table
+
+# ==========================================
+# Export for PowerPoint
+# ==========================================
+
+gtsave(
+  data = decel_table,
+  filename = "decel_top5.png",
+  zoom = 2
+)
+```
+
+
+```{r}
+
+# ============================================================
+# 2. Load the top five acceleration prospects and match players
+#    to NFL roster IDs so their headshots can be displayed
+# ============================================================
+
+accel_df <- read_csv("../Analysis/31_WR_Accel_Comparison_Table.csv") %>%
+  head(5)
+
+rosters <- nflreadr::load_rosters(seasons = 2023:2025) %>%
+  select(gsis_id, full_name) %>%
+  filter(!is.na(gsis_id)) %>%
+  distinct(full_name, .keep_all = TRUE)
+
+accel_df <- accel_df %>%
+  mutate(
+    display_name = recode(
+      display_name,
+      "Brian Thomas" = "Brian Thomas Jr."
+    )
+  ) %>%
+  left_join(rosters, by = c("display_name" = "full_name")) %>%
+  arrange(desc(accel_score))
+
+# Check which players successfully matched to an NFL roster ID
+print(accel_df %>% select(display_name, gsis_id))
+
+# Replace missing IDs with blank strings instead of displaying "NA"
+accel_df <- accel_df %>%
+  mutate(
+    gsis_id = if_else(is.na(gsis_id), "", gsis_id)
+  )
+
+
+# ============================================================
+# 3. Define color scales for the table
+# ============================================================
+
+# Acceleration score: darker green indicates a higher score
+score_palette <- scales::col_numeric(
+  palette = c("#FFFFFF", "#006D2C"),
+  domain = c(65, 85)
+)
+
+# Draft pick: earlier picks receive darker green shading
+draft_palette <- scales::col_numeric(
+  palette = c("#006D2C", "#FFFFFF"),
+  domain = c(1, 257)
+)
+
+# Rank difference: red indicates a negative difference,
+# yellow indicates approximately zero, and green indicates
+# a positive difference
+rank_max <- max(abs(accel_df$`Rank Difference`), na.rm = TRUE)
+
+if (!is.finite(rank_max) || rank_max == 0) {
+  rank_max <- 1
+}
+
+rank_palette <- scales::col_numeric(
+  palette = c("#D73027", "#FFFFBF", "#1A9850"),
+  domain = c(-rank_max, rank_max)
+)
+
+
+# ============================================================
+# 4. Create the table
+# ============================================================
+
+accel_table <- accel_df %>%
+  select(
+    display_name,
+    gsis_id,
+    accel_score,
+    draft_overall_pick,
+    ngs_athleticism_score,
+    `Rank Difference`
+  ) %>%
+  gt() %>%
+
+  # Set column header labels; leave the headshot column blank
+  cols_label(
+    display_name = "PLAYER",
+    gsis_id = "",
+    accel_score = "ACCELERATION SCORE",
+    draft_overall_pick = "DRAFT PICK",
+    ngs_athleticism_score = "NGS ATHLETICISM SCORE",
+    `Rank Difference` = "RANK DIFFERENCE"
+  ) %>%
+
+  # Add NFL player headshots
+  nflplotR::gt_nfl_headshots(
+    columns = gsis_id,
+    height = 75
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the acceleration score
+  # ----------------------------------------------------------
+
+  fmt_number(
+    columns = accel_score,
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = accel_score,
+    fn = score_palette
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the draft pick
+  # ----------------------------------------------------------
+
+  fmt(
+    columns = draft_overall_pick,
+    fns = function(x) {
+      ifelse(is.na(x), "—", as.character(x))
+    }
+  ) %>%
+  data_color(
+    columns = draft_overall_pick,
+    fn = function(x) {
+      pick <- suppressWarnings(as.numeric(x))
+      colors <- rep("#FFFFFF", length(x))
+
+      valid <- !is.na(pick) & pick >= 1 & pick <= 257
+
+      colors[valid] <- draft_palette(pick[valid])
+      colors[is.na(x)] <- "#D3D3D3"
+
+      colors
+    }
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the NGS athleticism score
+  # ----------------------------------------------------------
+
+  fmt_number(
+    columns = ngs_athleticism_score,
+    decimals = 1
+  ) %>%
+  data_color(
+    columns = ngs_athleticism_score,
+    fn = scales::col_numeric(
+      palette = c("#FFFFFF", "#006D2C"),
+      domain = c(50, 100)
+    )
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Format and color the rank difference
+  # ----------------------------------------------------------
+
+  fmt_number(
+    columns = `Rank Difference`,
+    decimals = 0,
+    force_sign = TRUE
+  ) %>%
+  data_color(
+    columns = `Rank Difference`,
+    fn = rank_palette
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Add the table title and set column widths
+  # ----------------------------------------------------------
+
+  tab_header(
+    title = md("**TOP 5 ACCELERATION PROSPECTS**")
+  ) %>%
+  cols_width(
+    display_name ~ px(200),
+    gsis_id ~ px(110),
+    accel_score ~ px(145),
+    draft_overall_pick ~ px(135),
+    ngs_athleticism_score ~ px(175),
+    `Rank Difference` ~ px(165)
+  ) %>%
+
+  # ----------------------------------------------------------
+  # General table styling: font, sizing, spacing, and borders
+  # ----------------------------------------------------------
+
+  tab_options(
+    table.font.names = "Arial",
+    table.font.size = px(19),
+    heading.title.font.size = px(29),
+    heading.align = "left",
+    table.border.top.width = px(3),
+    table.border.bottom.width = px(3),
+    column_labels.background.color = "white",
+    column_labels.font.weight = "bold",
+    column_labels.font.size = px(15),
+    data_row.padding = px(15),
+    table_body.hlines.color = "#E5E5E5",
+    table_body.vlines.color = "#FFFFFF",
+    table.width = pct(100),
+    table.background.color = "white"
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Style column headers
+  # ----------------------------------------------------------
+
+  tab_style(
+    style = cell_text(
+      color = "#1B263B",
+      weight = "bold",
+      size = px(15)
+    ),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style = cell_text(align = "center"),
+    locations = cells_column_labels(columns = -display_name)
+  ) %>%
+
+  # ----------------------------------------------------------
+  # Align and format table body text
+  # ----------------------------------------------------------
+
+  tab_style(
+    style = cell_text(
+      align = "center",
+      size = px(24),
+      color = "black"
+    ),
+    locations = cells_body(columns = -display_name)
+  ) %>%
+  tab_style(
+    style = cell_text(
+      align = "left",
+      size = px(22),
+      weight = "bold",
+      style = "italic",
+      color = "black"
+    ),
+    locations = cells_body(columns = display_name)
+  ) %>%
+
+  # Add alternating row shading and an outside border
+  opt_row_striping() %>%
+  opt_table_outline(
+    style = "solid",
+    color = "#D9D9D9",
+    width = px(1)
+  ) %>%
+    # Footnote explaining the rank difference
+  tab_footnote(
+    footnote = paste(
+      "Rank Difference = NGS Athleticism Rank - Acceleration Rank.",
+      "Positive values indicate the acceleration metric ranks a player",
+      "higher than NGS; negative values indicate a lower ranking."
+    ),
+    locations = cells_column_labels(columns = `Rank Difference`)
+  )
+
+# ============================================================
+# 5. Display and save the table
+# ============================================================
+
+accel_table
+
+# Save a high-resolution PNG version
+gtsave(
+  data = accel_table,
+  filename = "accel_top5.png",
+  zoom = 2
+)
+
+```
